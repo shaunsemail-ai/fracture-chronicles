@@ -2,6 +2,9 @@
 
 **For future Claude sessions:** This document contains the complete context for the Fracture Chronicles project. Read this before touching any code.
 
+**GitHub:** https://github.com/shaunsemail-ai/fracture-chronicles
+**Git workflow:** Same as science-game — HTTPS, push to `main`, credentials via macOS keychain. To push: `cd ~/Documents/Fracture && git add -p && git commit -m "..." && git push`
+
 ---
 
 ## 1. Project Overview
