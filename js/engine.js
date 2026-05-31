@@ -27,6 +27,7 @@ const Engine = (() => {
   let camX = 0, camY = 0;
   let activeSlot = 0;
   let lastTime = 0;
+  let _lastDt = 0;
   let transitionTimer = 0;
   let transitionTarget = null;
   let questCompletedMessage = '';
@@ -34,8 +35,12 @@ const Engine = (() => {
   let chestOpenedIds = new Set();
   let memoryPrisonCharacter = '';
   let memoryPrisonAttempt = 0;
-  let _playtimeTicker = 0;   // seconds since last analytics tick
-  let _pendingProfileName = null; // chosen in PLAYER_PICKER before CHAR_CREATE
+  let _playtimeTicker = 0;
+  let _pendingProfileName = null;
+
+  // ── Tap-to-move ───────────────────────────────────────────────
+  let tapTarget    = null;  // { tx, ty } — tile the player is walking toward
+  let tapIndicator = null;  // { tx, ty, timer } — blink animation at tapped tile
 
   // ── Knowledge Trial state ─────────────────────────────────────
   let lastGameEvent = null;         // { type, timestamp, data }
@@ -570,22 +575,49 @@ const Engine = (() => {
         return;
       }
 
-      // Movement
+      // ── Movement — keyboard OR tap-to-move ───────────────────
+      // Keyboard takes priority; cancels tap target
+      const kbDx = inp.left ? -1 : inp.right ? 1 : 0;
+      const kbDy = !kbDx && inp.up ? -1 : !kbDx && inp.down ? 1 : 0;
+      if (kbDx !== 0 || kbDy !== 0) {
+        tapTarget = null; // keyboard cancels tap navigation
+      }
+
       if (!Player.state.moving) {
-        let dx = 0, dy = 0;
-        if (inp.up) dy = -1;
-        else if (inp.down) dy = 1;
-        else if (inp.left) dx = -1;
-        else if (inp.right) dx = 1;
+        let dx = kbDx, dy = kbDy;
+
+        if (dx === 0 && dy === 0 && tapTarget) {
+          // Auto-walk one step toward tap target
+          const dtx = tapTarget.tx - Player.state.tx;
+          const dty = tapTarget.ty - Player.state.ty;
+          if (dtx === 0 && dty === 0) {
+            tapTarget = null; // arrived
+          } else {
+            // Move along whichever axis is larger (reduces diagonal stutter)
+            if (Math.abs(dtx) >= Math.abs(dty)) {
+              dx = Math.sign(dtx);
+            } else {
+              dy = Math.sign(dty);
+            }
+          }
+        }
 
         if (dx !== 0 || dy !== 0) {
-          // Update facing even if blocked
           if (dx > 0) Player.state.facing = 'right';
           else if (dx < 0) Player.state.facing = 'left';
           else if (dy > 0) Player.state.facing = 'down';
           else if (dy < 0) Player.state.facing = 'up';
 
-          Player.tryMove(dx, dy);
+          const moved = Player.tryMove(dx, dy);
+          // If tap-navigating and blocked, try the other axis once
+          if (!moved && tapTarget) {
+            const dtx = tapTarget.tx - Player.state.tx;
+            const dty = tapTarget.ty - Player.state.ty;
+            const alt = dx !== 0
+              ? Player.tryMove(0, Math.sign(dty) || 0)
+              : Player.tryMove(Math.sign(dtx) || 0, 0);
+            if (!alt) tapTarget = null; // truly stuck — give up
+          }
         }
       }
 
@@ -929,6 +961,25 @@ const Engine = (() => {
       Pets.draw(ctx, camX, camY, tileSize);
       Player.draw(ctx, camX, camY, tileSize);
 
+      // Tap-to-move blink indicator
+      if (tapIndicator) {
+        const icx = tapIndicator.tx * tileSize - camX + tileSize * 0.5;
+        const icy = tapIndicator.ty * tileSize - camY + tileSize * 0.5;
+        const progress = 1 - tapIndicator.timer; // 0=just tapped, 1=gone
+        const r1 = tileSize * (0.15 + 0.25 * progress);
+        const r2 = tileSize * (0.05 + 0.12 * progress);
+        ctx.save();
+        ctx.globalAlpha = tapIndicator.timer * 0.75;
+        ctx.strokeStyle = '#d4c040';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(icx, icy, r1, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = tapIndicator.timer * 0.55;
+        ctx.beginPath(); ctx.arc(icx, icy, r2, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+        tapIndicator.timer -= _lastDt * 2.2; // fades in ~0.45s
+        if (tapIndicator.timer <= 0) tapIndicator = null;
+      }
+
       const p = Player.state;
       const cs = Player.computeStats(p);
       UI.drawHUD(ctx, W, H, p, cs);
@@ -1020,6 +1071,7 @@ const Engine = (() => {
   function loop(timestamp) {
     const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
     lastTime = timestamp;
+    _lastDt = dt;
     update(dt);
     render();
     requestAnimationFrame(loop);
@@ -1028,32 +1080,95 @@ const Engine = (() => {
   // Start
   window.addEventListener('DOMContentLoaded', init);
 
-  return { STATE, get currentState() { return state; } };
+  // ── Tap-to-move / tap-to-interact ────────────────────────────
+  function handleWorldTap(screenX, screenY) {
+    const wtx = Math.floor((screenX + camX) / tileSize);
+    const wty = Math.floor((screenY + camY) / tileSize);
+    const px  = Player.state.tx;
+    const py  = Player.state.ty;
+
+    // Check if the tapped tile contains an interactable
+    const isAdjacent = Math.abs(wtx - px) <= 1 && Math.abs(wty - py) <= 1;
+
+    // NPC
+    const npc = Entities.getNPCAt(wtx, wty);
+    if (npc) {
+      if (isAdjacent) {
+        Input.state.actionPress = true;
+      } else {
+        tapTarget    = { tx: wtx, ty: wty };
+        tapIndicator = { tx: wtx, ty: wty, timer: 1.0 };
+      }
+      return;
+    }
+
+    // Chest
+    const chest = World.getChest(wtx, wty);
+    if (chest && !chestOpenedIds.has(chest.id)) {
+      if (isAdjacent) {
+        Input.state.actionPress = true;
+      } else {
+        tapTarget    = { tx: wtx, ty: wty };
+        tapIndicator = { tx: wtx, ty: wty, timer: 1.0 };
+      }
+      return;
+    }
+
+    // Shrine or campfire tile
+    const tileType = World.getTile(wtx, wty);
+    if (tileType === TILE.SHRINE || tileType === TILE.EMBER) {
+      if (isAdjacent) {
+        Input.state.actionPress = true;
+      } else {
+        tapTarget    = { tx: wtx, ty: wty };
+        tapIndicator = { tx: wtx, ty: wty, timer: 1.0 };
+      }
+      return;
+    }
+
+    // Pet spawn
+    const petSpawn = World.getPetSpawn(wtx, wty);
+    if (petSpawn) {
+      if (isAdjacent) {
+        Input.state.actionPress = true;
+      } else {
+        tapTarget    = { tx: wtx, ty: wty };
+        tapIndicator = { tx: wtx, ty: wty, timer: 1.0 };
+      }
+      return;
+    }
+
+    // Plain walkable tile — just walk there
+    tapTarget    = { tx: wtx, ty: wty };
+    tapIndicator = { tx: wtx, ty: wty, timer: 1.0 };
+  }
+
+  return { STATE, get currentState() { return state; }, handleWorldTap };
 })();
 
-// ── Touch tap handling for UI ─────────────────────────────────
+// ── Touch dispatch — UI screens and world taps ────────────────
+// Input.js handles button taps (Attack/Dodge/Menu) and exposes
+// consumeWorldTap() for engine to read. This handler deals with
+// every UI overlay state and converts world taps to game actions.
 document.addEventListener('touchstart', e => {
-  const t = e.changedTouches[0];
-  const tx = t.clientX, ty = t.clientY;
+  // Input.js already ran its touchstart (called first via addEventListener order).
+  // Consume the world tap if the engine state needs it.
+  const rawTap = Input.consumeWorldTap();
   const H = window.innerHeight, W = window.innerWidth;
   const eState = Engine.currentState;
 
   // ── Main menu ──────────────────────────────────────────────
   if (eState === 'main_menu') {
+    if (!rawTap) return;
+    const { x: sx, y: sy } = rawTap;
     const slots = Save.listSlots();
     const itemCount = slots.length + 2; // slots + Stats + Settings
-    const bH = 54, gap = 8;
-    const startY = H * 0.5;
+    const bH = 54, gap = 8, startY = H * 0.5;
     for (let i = 0; i < itemCount; i++) {
       const iy = startY + i * (bH + gap);
-      if (ty >= iy && ty <= iy + bH) {
-        if (UI.mainMenuSel === i) {
-          Input.state.confirmPress = true;
-        } else {
-          UI.mainMenuSel = i;
-          // Second tap on same row not needed — single tap = select + confirm
-          Input.state.confirmPress = true;
-        }
+      if (sy >= iy && sy <= iy + bH) {
+        UI.mainMenuSel = i;
+        Input.state.confirmPress = true;
         break;
       }
     }
@@ -1062,12 +1177,13 @@ document.addEventListener('touchstart', e => {
 
   // ── Player picker ──────────────────────────────────────────
   if (eState === 'player_picker') {
+    if (!rawTap) return;
+    const { x: sx, y: sy } = rawTap;
     const names = typeof PLAYER_NAMES !== 'undefined' ? PLAYER_NAMES : [];
-    const bH = 56, gap = 10;
-    const startY = H * 0.35;
+    const bH = 56, gap = 10, startY = H * 0.35;
     for (let i = 0; i < names.length; i++) {
       const iy = startY + i * (bH + gap);
-      if (ty >= iy && ty <= iy + bH) {
+      if (sy >= iy && sy <= iy + bH) {
         if (typeof UI.playerNameSel !== 'undefined') UI.playerNameSel = i;
         Input.state.confirmPress = true;
         break;
@@ -1078,38 +1194,31 @@ document.addEventListener('touchstart', e => {
 
   // ── Character creation ─────────────────────────────────────
   if (eState === 'char_create') {
+    if (!rawTap) return;
+    const { x: sx, y: sy } = rawTap;
     const classOpts = UI.classOpts || ['ironclad', 'ashwalker', 'veilcaster'];
-    const bH = 80, gap = 12;
-    const startY = H * 0.22;
-    let hit = false;
+    const bH = 80, gap = 12, startY = H * 0.22;
     for (let i = 0; i < classOpts.length; i++) {
       const iy = startY + i * (bH + gap);
-      if (ty >= iy && ty <= iy + bH) {
+      if (sy >= iy && sy <= iy + bH) {
         UI.charCreateClass = i;
-        hit = true;
-        // Don't confirm yet — let player review. Tap BEGIN or tap selected class again to confirm.
         break;
       }
     }
-    // BEGIN button
     const beginY = startY + classOpts.length * (bH + gap) + 16;
-    if (ty >= beginY && ty <= beginY + 40) {
-      Input.state.confirmPress = true;
-    } else if (hit) {
-      // Tap on already-selected class = confirm
-      // (handled above; we set selection; second tap if same would need state — skip, BEGIN button is clear)
-    }
+    if (sy >= beginY && sy <= beginY + 40) Input.state.confirmPress = true;
     return;
   }
 
   // ── Pause menu ─────────────────────────────────────────────
   if (eState === 'pause') {
+    if (!rawTap) return;
+    const { x: sx, y: sy } = rawTap;
     const opts = ['Resume', 'Journal', 'Inventory', 'Talents', 'Save', 'Main Menu'];
-    const bH = 40, gap = 6;
-    const startY = H * 0.3;
+    const bH = 40, gap = 6, startY = H * 0.3;
     for (let i = 0; i < opts.length; i++) {
       const iy = startY + i * (bH + gap);
-      if (ty >= iy && ty <= iy + bH) {
+      if (sy >= iy && sy <= iy + bH) {
         UI.pauseSel = i;
         Input.state.confirmPress = true;
         break;
@@ -1120,6 +1229,7 @@ document.addEventListener('touchstart', e => {
 
   // ── Dialogue ───────────────────────────────────────────────
   if (eState === 'dialogue') {
+    const sy = rawTap ? rawTap.y : e.changedTouches[0].clientY;
     const boxH = H * 0.3;
     const boxY = H - boxH - 10;
     const node = Story.getCurrentNode();
@@ -1128,27 +1238,27 @@ document.addEventListener('touchstart', e => {
       const choiceY = boxY + boxH - (nc * 26) - 8;
       for (let i = 0; i < nc; i++) {
         const cy = choiceY + i * 26;
-        if (ty >= cy - 4 && ty <= cy + 22) {
+        if (sy >= cy - 4 && sy <= cy + 22) {
           UI.dialogueChoice = i;
           Input.state.confirmPress = true;
           break;
         }
       }
     } else {
-      if (ty > boxY) Input.state.confirmPress = true;
+      if (sy > boxY) Input.state.confirmPress = true;
     }
     return;
   }
 
   // ── Memory prison / Knowledge trial quiz ──────────────────
   if (eState === 'memory_prison') {
+    const sy = rawTap ? rawTap.y : e.changedTouches[0].clientY;
     const qs = UI.quizState;
     if (qs && !qs.done && qs.quiz.questions[qs.currentQ]) {
-      const choiceStartY = 164;
       const cq = qs.quiz.questions[qs.currentQ];
       for (let i = 0; i < cq.choices.length; i++) {
-        const cy = choiceStartY + i * 50;
-        if (ty >= cy && ty <= cy + 42) {
+        const cy = 164 + i * 50;
+        if (sy >= cy && sy <= cy + 42) {
           qs.selected = i;
           Input.state.confirmPress = true;
           break;
@@ -1159,10 +1269,16 @@ document.addEventListener('touchstart', e => {
     return;
   }
 
-  // ── Game over — Knowledge Trial "?" button ─────────────────
+  // ── Game over ──────────────────────────────────────────────
   if (eState === 'game_over') {
-    // Tap anywhere on screen to confirm/cancel (already handled by input state)
     Input.state.confirmPress = true;
     return;
+  }
+
+  // ── PLAYING — tap-to-move / tap-to-interact ────────────────
+  if (eState === 'playing' && rawTap) {
+    // Convert screen coordinates → world tile
+    // camX/camY and tileSize are inside engine scope; expose via a helper
+    Engine.handleWorldTap(rawTap.x, rawTap.y);
   }
 }, { passive: true });
