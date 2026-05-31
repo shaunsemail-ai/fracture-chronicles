@@ -28,9 +28,7 @@ All JS is in `~/Documents/Fracture/js/`. Load order matters (see Section 3).
 | File | Role |
 |------|------|
 | `palette.js` | Global color constants (`PAL`), tile type enum (`TILE`), walkable set (`TILE_WALK`), `seededRand()` helper |
-| `config.js` | Per-player curriculum config (`PLAYER_CONFIGS`). Fill `Pryce.subjects` here when his courses are known. |
-| `analytics.js` | Per-player quiz performance tracking. Separate localStorage key `fracture_analytics_v1`. Stats dashboard backend. |
-| `input.js` | Edge-of-screen touch zones (left/right/top/bottom 18-22% = movement), small action buttons in center-right. `Input.consume()` for one-shot events. |
+| `input.js` | **Tap-to-move model.** World taps stored in `_lastWorldTap`; engine reads via `Input.consumeWorldTap()`. Three corner buttons (Attack/Dodge/Menu). Keyboard (WASD/arrows) still supported. No D-pad, no edge zones. |
 | `save.js` | localStorage save/load, 3 slot system (`Save.save()`, `Save.load()`, `Save.listSlots()`) |
 | `items.js` | All item definitions: consumables, weapons (melee/ranged/magic), armor, accessories, ammo, quest items. `ITEMS` global dict. |
 | `world.js` | Tile map definitions for all 5 zones, zone manager, `World.loadZone()`, exit/chest/NPC/trigger lookup, tile renderer |
@@ -39,25 +37,25 @@ All JS is in `~/Documents/Fracture/js/`. Load order matters (see Section 3).
 | `player.js` | Player state, movement interpolation, stats computation, talent trees (all 3), combat helpers, drawing |
 | `entities.js` | Enemies (AI, patrol/chase/attack states), NPCs, projectiles, floating text, particles |
 | `combat.js` | Basic attack (melee/ranged/magic), talent active abilities, dodge/roll, cooldowns |
-| `pets.js` | All 4 pet types, adoption dialogues, pet AI follow, passives (early warning, scavenger, reveal, swift), hurt/recovery system, drawing |
+| `pets.js` | **10 species, 3 active at once.** `activePetIds[]` (max 3), `followStates[]` per slot, formation offsets. Custom naming via HTML overlay. Species: puppy, cat, veilmoth, fox, wolf_cub, rabbit, crow, stoat, toad, glowbug. |
 | `crafting.js` | Campfire recipe system, timing mechanic (sweep bar), active buff management and rendering |
 | `merchant.js` | Quill's shop, permanent stock + daily rotating specials, buy/sell, every-5th-buy discount system |
-| `ui.js` | HUD, dialogue box, main menu, character creation, pause menu, inventory, talent tree, journal, Memory Prison quiz UI, screen flash, level-up overlay |
-| `engine.js` | Main game loop, state machine, input dispatch, zone transitions, save on transition, campfire proximity, death handling |
-| `curriculum.js` | Q1 curriculum for Honors Biology + Honors Geometry. Question banks, teaching NPC dialogues, `startTeachingQuiz()`, Knowledge Trial pool. **(Written in this session)** |
+| `config.js` | Per-player curriculum config (`PLAYER_CONFIGS`, `PLAYER_NAMES`). Merrick: biology + geometry. Fill `Pryce.subjects` when his courses are known. |
+| `analytics.js` | Per-player quiz performance tracking. Separate localStorage key `fracture_analytics_v1`. `startSession`, `endSession`, `tickPlaytime`, `recordAnswer`, `getProfileStats`, `getWeakTopics`, `exportReport`. |
+| `ui.js` | HUD, dialogue box, main menu, character creation, pause menu, inventory, talent tree, journal, Memory Prison quiz UI, screen flash, level-up overlay. Also: `styledPanel()` helper, player picker screen, stats screen. |
+| `curriculum.js` | Q1 curriculum for Honors Biology + Honors Geometry. Question banks, teaching NPC dialogues, `startTeachingQuiz()`, Knowledge Trial pool. |
+| `engine.js` | Main game loop, state machine, input dispatch, zone transitions, save on transition, campfire proximity, death handling. **New:** `handleWorldTap()` (screen→tile, interactable detection, facing update, tap navigation). Exposes `Engine.handleWorldTap`. |
 
 ---
 
 ## 3. Load Order
 
-Exact `<script>` tag order from `index.html`:
+Exact `<script>` tag order from `index.html` (current, verified):
 
 ```
 palette.js
 input.js
 save.js
-config.js
-analytics.js
 items.js
 world.js
 story.js
@@ -68,14 +66,14 @@ combat.js
 pets.js
 crafting.js
 merchant.js
+config.js
+analytics.js
 ui.js
-curriculum.js   ← add this tag after merchant.js
+curriculum.js
 engine.js       ← always last
 ```
 
-`engine.js` must be last because it calls `window.addEventListener('DOMContentLoaded', init)` and references all other modules. `curriculum.js` must come before `engine.js` but after `ui.js` (it references `UI.startMemoryPrison` infrastructure).
-
-**Note:** `curriculum.js` is not yet in `index.html`. Add the script tag between `merchant.js` and `engine.js`.
+`engine.js` must be last. `config.js` and `analytics.js` load after all game-data files but before `ui.js` and `engine.js` — both modules are only consumed by ui.js and engine.js.
 
 ---
 
@@ -111,7 +109,7 @@ No import/export. Modules communicate by direct global reference. Load order = d
 - `Curriculum` — education content and quiz utilities **(new)**
 
 **State machine (Engine.STATE):**
-`MAIN_MENU → CHAR_CREATE → PLAYING ↔ DIALOGUE ↔ PAUSE ↔ INVENTORY ↔ TALENTS ↔ JOURNAL ↔ CRAFTING ↔ SHOPPING ↔ MEMORY_PRISON`
+`MAIN_MENU → PLAYER_PICKER → CHAR_CREATE → PLAYING ↔ DIALOGUE ↔ PAUSE ↔ INVENTORY ↔ TALENTS ↔ JOURNAL ↔ CRAFTING ↔ SHOPPING ↔ MEMORY_PRISON ↔ STATS`
 Plus: `GAME_OVER`, `TRANSITION`
 
 **Player.state.flags** is the single source of truth for all story/quest/game state. Flags are persisted in every save. This is how quest checks, dialogue branches, locked exits, and unlock conditions all work.
@@ -329,22 +327,30 @@ Three trees, all available to all classes. 3 tiers each, tier N requires tier N-
 
 ### Pets
 
-**4 pet types:**
+**10 species, 3 active simultaneously.** `activePetIds[]` array (max 3 slots). All 3 follow in formation using different lag values so they spread naturally.
+
+**Original 4 species + 6 new:**
 
 | Pet | Found in | Passive | Recovery message |
 |-----|----------|---------|-----------------|
-| **Puppy (Dog)** | ashfen_ruins (tx:9,ty:20) | Early warning — growls before enemy aggro | "limped back to camp" |
-| **Cat** | thornwood_edge (tx:5,ty:14) | Scavenger — drops random items post-combat every ~45s | "vanished and reappeared at camp, uninjured, somehow" |
+| **Puppy** | ashfen_ruins (tx:9,ty:20) | Early warning — growls before enemy aggro | "limped back to camp" |
+| **Cat** | thornwood_edge (tx:5,ty:14) | Scavenger — random item drops post-combat | "vanished and reappeared at camp, uninjured" |
 | **Veilmoth** | ashfen_ruins (tx:13,ty:14) | Reveal — highlights hidden chests within 3 tiles | "dissolved into light and reformed at the nearest shrine" |
-| **Fox** | thornwood_edge (tx:22,ty:8) | Swift — +8% movement speed | "outran whatever caught it and found camp on its own" |
+| **Fox** | thornwood_edge (tx:22,ty:8) | Swift — +8% movement speed | "outran whatever caught it" |
+| **Wolf Cub** | *(not yet placed)* | *(TBD)* | — |
+| **Rabbit** | *(not yet placed)* | *(TBD)* | — |
+| **Crow** | *(not yet placed)* | *(TBD)* | — |
+| **Stoat** | *(not yet placed)* | *(TBD)* | — |
+| **Toad** | *(not yet placed)* | *(TBD)* | — |
+| **Glowbug** | *(not yet placed)* | *(TBD)* | — |
 
-**Adoption:** Approach a pet's spawn tile, press `[A]`. Dialogue + name choice from 4 default names. Can only have one active pet at a time; previous goes to "at_camp."
+**Adoption:** Approach spawn tile, tap (or `[A]`). Dialogue + 4 name presets OR "Name them yourself" (HTML overlay input). Roster capacity is 50; only 3 follow at a time; rest are "at_camp."
 
-**Pets cannot permanently die.** When hurt (low-probability hit during combat), pet enters `recovering` state with a flavor message. Recovers to `at_camp` on next zone enter or shrine rest. On shrine rest or zone enter with no active pet, camp pet re-joins automatically.
+**Pets cannot permanently die.** When hurt, pet enters `recovering` → `at_camp`. Recovers on next zone enter or shrine rest. `_fillSquadFromCamp()` auto-restores camp pets to fill empty active slots.
 
-**Pell bond:** The puppy has `pellBond: true`. When the puppy is adopted, flag `pell_can_bond` is set. The dialogue `pell_meets_dog` fires when both Pell is following and the puppy is active. (Full trigger logic TBD — quest "The Other Shoe.")
+**Pell bond:** Puppy + Pell both present → `pell_meets_dog` dialogue triggers. (Full trigger TBD — quest "The Other Shoe.")
 
-**The veilmoth's default names include "Vael"** — this is a deliberate story seed.
+**The veilmoth's default names include "Vael"** — deliberate story seed.
 
 ### Quests
 
@@ -471,20 +477,27 @@ The "?" button appears when ANY of these is true:
 
 ## 10. Roadmap
 
-### Built (as of this session)
+### Built (current state)
 
 - Zones 1-5 (Ashfen Ruins, Thornwood Edge, Thornkin Camp, Junction Approach, Junction Tower)
 - Full combat: melee, ranged, magic, dodge
-- Talent trees: all 3 trees, all tiers, education gates wired (flags only, no curriculum content previously)
+- Talent trees: all 3 trees, all tiers, education gates wired
 - Crafting: timing mechanic, all 14+ recipes, active buffs
 - Merchant: Quill, daily specials, discount system
-- Pets: all 4 types, full passives, hurt/recovery system
+- Pets: 10 species defined, 3 active simultaneously, custom naming, formation follow, 50-pet roster architecture
 - Quests: 13 defined quests, journal, rewards
 - Memory Prison: quiz infrastructure, placeholder questions
 - Act 1 story: full dialogue trees for all characters
 - Save system: 3 slots, localStorage
-- **Curriculum module: Q1 Honors Bio + Geometry question banks (written this session)**
-- **Knowledge Trial (pop quiz undo) system (written this session)**
+- Curriculum module: Q1 Honors Bio + Geometry question banks
+- Knowledge Trial (pop quiz undo) system
+- Analytics module: per-player quiz tracking, session timers, weak topic detection
+- Config module: per-player curriculum config (Merrick configured; Pryce pending)
+- Player picker screen: choose Merrick/Pryce on new game
+- Stats screen: 3 tabs (overview, by topic, wrong answers)
+- **Mobile controls: tap-to-move with gold blink indicator, three corner buttons only (no D-pad)**
+- **Landscape orientation: CSS rotate-device prompt for portrait mode**
+- **GitHub Pages live at https://shaunsemail-ai.github.io/fracture-chronicles/**
 
 ### Phase 3 Planned
 
@@ -537,7 +550,14 @@ The tone of this game is what makes it different from educational software. Foll
 
 **Adding an item:** Add to `ITEMS` in `items.js`. If it is a consumable, include a `use(player)` function. Add it to `Merchant`'s stock or recipe outputs as needed.
 
-**curriculum.js integration into index.html:** Add `<script src="js/curriculum.js"></script>` between `merchant.js` and `engine.js` in index.html.
+**Placing new pet species:** Add a `petSpawns` entry in the relevant zone definition in world.js with `{ tx, ty, petId }`. The species is already defined in pets.js; it just needs a spawn point.
+
+**Tap-to-move architecture:**
+- `Input.consumeWorldTap()` — engine touchstart calls this to get the raw screen coordinate
+- `Engine.handleWorldTap(screenX, screenY)` — converts to tile, detects interactables, either faces+actionPress or sets tapTarget+tapIndicator
+- `tapTarget { tx, ty }` — auto-walks player one tile per frame toward this point
+- `tapIndicator { tx, ty, timer }` — draws two expanding gold rings; timer 1.0→0 at 2.2x speed
+- Keyboard input cancels tapTarget immediately
 
 **Knowledge Trial state flow:**
 ```
@@ -548,6 +568,8 @@ PLAYING → [? tapped] → knowledge_trial_prompt (overlay, not state change)
 ```
 
 The Knowledge Trial reuses the MEMORY_PRISON quiz UI. The only difference is the flavor text and the `onPass`/`onFail` callbacks.
+
+**ctx.save/restore hygiene:** Every function that calls `ctx.fillText`, `ctx.font`, `ctx.textAlign`, `ctx.globalAlpha`, or `ctx.shadowBlur` MUST wrap those calls in `ctx.save()/ctx.restore()`. A leak will silently corrupt all subsequent renders that frame. The bug that hid Maren's dialogue text was a `ctx.textAlign = 'right'` set without save/restore in the continue-hint block.
 
 ---
 
@@ -652,3 +674,35 @@ Proposed mapping:
 - Ironclad Tier 3 (Warlord): Complete the Broken Bridge midpoint puzzle (you calculated the load-bearing point)
 - Ashwalker Tier 3 (Phantom Hunter): Complete the Specimen Board classification (Kessler teaches you how to track Hollow metabolism)
 - Veilcaster Tier 3 (Unraveling): Complete the Organelle Chamber (you understand what the Architects used to power their magic)
+
+---
+
+## 14. Known Open Issues (as of last session)
+
+These are confirmed bugs or incomplete features that have not yet been fixed. Address before shipping to Pryce.
+
+### Code Bugs
+
+1. **`_topicId` not set in question objects** — `getKnowledgeTrialQuiz()` and `getQuizForPlayer()` in curriculum.js set `_topic` (topic name string) but not `_topicId` (topic ID for analytics). `confirmMemoryAnswer()` in ui.js falls back to `'unknown'`. Fix: add `_topicId: topic.id` to each question object inside both functions.
+
+2. **Analytics session bleed** — `analytics.js` stores `_sessionStartTime` at module level. If profile A plays then profile B loads in the same browser session, the session start time bleeds. Fix: store start time per profile in the analytics data object, keyed by profile name.
+
+3. **`quizState` export is getter-only** — `UI.quizState` is exported as a getter. Any code that tries to assign `UI.quizState = ...` will silently fail. The correct pattern is `UI.startKnowledgeTrial(quiz)`. Audit all callers.
+
+4. **Memory Prison placeholder questions have no `_topicId`** — story.js `MEMORY_PRISON.aldric` questions don't have `_topicId` or `_subject` fields. These won't pollute anything currently, but will record as topic `'unknown'` once curriculum integration is complete.
+
+### Content Incomplete
+
+5. **Pryce's curriculum config is empty** — `config.js` has `Pryce: { subjects: [] }`. Once Shaun provides Pryce's courses, add the subject IDs to `subjects[]` and confirm any additional topic banks needed in curriculum.js.
+
+6. **6 pet species have no spawn points** — wolf_cub, rabbit, crow, stoat, toad, glowbug are defined in pets.js but not placed in any zone. Add `petSpawns` entries to zone definitions in world.js before those pets are discoverable.
+
+7. **New pets have no passive abilities** — the 6 new species use placeholder passives. Design and implement their actual passive effects to match the design intentions.
+
+### Not Yet Implemented
+
+8. **Teaching NPCs (Dr. Kessler, Voss)** — the characters are referenced in curriculum design notes but not placed in any zone and have no dialogue trees. These are needed before the teaching quiz system is useful.
+
+9. **Puzzle mini-games** — the entire Section 13 puzzle system is designed but not built. No `PUZZLE` state, no `puzzles.js`, no world interactions trigger puzzles yet.
+
+10. **Pryce's save slot / player picker** — the player picker screen is built and selects from `PLAYER_NAMES`, but Pryce's name doesn't appear until his `PLAYER_CONFIGS` entry is filled in. Once his subjects are added, he's immediately playable.
