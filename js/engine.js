@@ -1090,10 +1090,21 @@ const Engine = (() => {
     // Check if the tapped tile contains an interactable
     const isAdjacent = Math.abs(wtx - px) <= 1 && Math.abs(wty - py) <= 1;
 
+    // Helper: point player toward a tile so handleInteraction can find it
+    function faceToward(tx, ty) {
+      const dx = tx - px, dy = ty - py;
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        Player.state.facing = dx > 0 ? 'right' : 'left';
+      } else {
+        Player.state.facing = dy > 0 ? 'down' : 'up';
+      }
+    }
+
     // NPC
     const npc = Entities.getNPCAt(wtx, wty);
     if (npc) {
       if (isAdjacent) {
+        faceToward(wtx, wty);
         Input.state.actionPress = true;
       } else {
         tapTarget    = { tx: wtx, ty: wty };
@@ -1106,6 +1117,7 @@ const Engine = (() => {
     const chest = World.getChest(wtx, wty);
     if (chest && !chestOpenedIds.has(chest.id)) {
       if (isAdjacent) {
+        faceToward(wtx, wty);
         Input.state.actionPress = true;
       } else {
         tapTarget    = { tx: wtx, ty: wty };
@@ -1118,6 +1130,7 @@ const Engine = (() => {
     const tileType = World.getTile(wtx, wty);
     if (tileType === TILE.SHRINE || tileType === TILE.EMBER) {
       if (isAdjacent) {
+        faceToward(wtx, wty);
         Input.state.actionPress = true;
       } else {
         tapTarget    = { tx: wtx, ty: wty };
@@ -1130,6 +1143,7 @@ const Engine = (() => {
     const petSpawn = World.getPetSpawn(wtx, wty);
     if (petSpawn) {
       if (isAdjacent) {
+        faceToward(wtx, wty);
         Input.state.actionPress = true;
       } else {
         tapTarget    = { tx: wtx, ty: wty };

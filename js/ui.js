@@ -184,6 +184,7 @@ const UI = (() => {
     ctx.fillStyle = PAL.text;
     ctx.font = '13px "Courier New", monospace';
     ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
     for (const word of words) {
       const testLine = line + word + ' ';
       if (ctx.measureText(testLine).width > maxWidth && line.length > 0) {
@@ -215,7 +216,8 @@ const UI = (() => {
       // Hint
       text(ctx, 'Tap to choose', boxX + boxW - 90, boxY + boxH - 12, PAL.textDim, 10);
     } else {
-      // Continue hint
+      // Continue hint — wrapped in save/restore to avoid leaking textAlign/textBaseline
+      ctx.save();
       const t = Date.now() * 0.002;
       ctx.fillStyle = PAL.textDim;
       ctx.font = '11px "Courier New", monospace';
@@ -223,7 +225,7 @@ const UI = (() => {
       ctx.textBaseline = 'middle';
       ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t);
       ctx.fillText('[ Tap to continue ]', boxX + boxW - 12, boxY + boxH - 12);
-      ctx.globalAlpha = 1;
+      ctx.restore();
     }
   }
 

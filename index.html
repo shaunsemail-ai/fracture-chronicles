@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="screen-orientation" content="landscape">
   <title>Fracture Chronicles</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -39,9 +40,33 @@
       letter-spacing: 4px;
       text-transform: uppercase;
     }
+    #rotate-prompt {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #050508;
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #d4c89a;
+      font-family: 'Courier New', monospace;
+      text-align: center;
+      gap: 18px;
+    }
+    #rotate-prompt .icon { font-size: 52px; }
+    #rotate-prompt .msg  { font-size: 15px; letter-spacing: 2px; color: #7a6e52; }
+    @media (orientation: portrait) {
+      #rotate-prompt { display: flex; }
+    }
   </style>
 </head>
 <body>
+  <div id="rotate-prompt">
+    <div class="icon">&#8635;</div>
+    <div style="font-size:17px; letter-spacing:3px;">ROTATE DEVICE</div>
+    <div class="msg">Fracture Chronicles plays in landscape</div>
+  </div>
   <canvas id="canvas"></canvas>
   <div id="ui-overlay"></div>
   <div id="loading">Loading...</div>
