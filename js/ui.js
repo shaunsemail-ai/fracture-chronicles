@@ -28,6 +28,18 @@ const UI = (() => {
     ctx.restore();
   }
 
+  // Styled panel with explicit colors — for dialogs that need distinct chrome
+  function styledPanel(ctx, x, y, w, h, bgColor, borderColor, lw = 1.5, r = 8) {
+    ctx.save();
+    ctx.fillStyle = bgColor;
+    roundRect(ctx, x, y, w, h, r);
+    ctx.fill();
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = lw;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function bar(ctx, x, y, w, h, val, max, fillColor, bgColor) {
     ctx.fillStyle = bgColor;
     roundRect(ctx, x, y, w, h, 3);
@@ -675,6 +687,20 @@ const UI = (() => {
     quizState.answers.push({ correct, selected: quizState.selected });
     quizState.flash = 1;
     quizState.flashColor = correct ? '0,180,0' : '180,0,0';
+
+    // Record every answer to analytics
+    if (typeof Curriculum !== 'undefined' && typeof Player !== 'undefined' && Player.state.profile) {
+      Curriculum.recordQuizAnswer(
+        Player.state.profile,
+        cq._topicId || cq.topicId || 'unknown',
+        cq._subject || cq.subject || 'unknown',
+        cq.q || cq.questionText || '',
+        cq.choices,
+        cq.answer,
+        quizState.selected
+      );
+    }
+
     quizState.selected = -1;
     quizState.currentQ++;
     if (quizState.currentQ >= quizState.quiz.questions.length) {
@@ -782,7 +808,7 @@ const UI = (() => {
     const bh = 210;
     const bx = (W - bw) / 2;
     const by = (H - bh) / 2;
-    panel(ctx, bx, by, bw, bh, '#1a1408', '#c8a030', 2, 10);
+    styledPanel(ctx, bx, by, bw, bh, '#1a1408', '#c8a030', 2, 10);
 
     const cx = W / 2;
     boldText(ctx, 'KNOWLEDGE TRIAL', cx, by + 28, '#f0c040', 16, 'center');
@@ -803,12 +829,12 @@ const UI = (() => {
     const btnW = 140, btnH = 34;
     const btnX = cx - btnW - 10;
     const btnY = by + bh - 54;
-    panel(ctx, btnX, btnY, btnW, btnH, '#1a2e10', '#50c040', 1, 6);
+    styledPanel(ctx, btnX, btnY, btnW, btnH, '#1a2e10', '#50c040', 1, 6);
     boldText(ctx, '[A] Begin Trial', btnX + btnW / 2, btnY + btnH / 2, '#80ff60', 12, 'center');
 
     // Cancel button
     const canX = cx + 10;
-    panel(ctx, canX, btnY, btnW, btnH, '#2e1010', '#c04040', 1, 6);
+    styledPanel(ctx, canX, btnY, btnW, btnH, '#2e1010', '#c04040', 1, 6);
     boldText(ctx, '[B] Accept Fate', canX + btnW / 2, btnY + btnH / 2, '#ff8060', 12, 'center');
 
     ctx.restore();

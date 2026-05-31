@@ -406,10 +406,8 @@ const Pets = (() => {
     );
 
     Player.state.flags['pet_recovering_' + targetId] = true;
-    // Only set knowledge trial flag if squad is now empty
-    if (activePetIds.length === 0) {
-      Player.state.flags.knowledge_trial_pet = targetId;
-    }
+    // Always record the hurt pet so Knowledge Trial can reference it
+    Player.state.flags.knowledge_trial_pet = targetId;
     warningActive = false;
   }
 

@@ -836,25 +836,21 @@ const Engine = (() => {
     if (state === STATE.MAIN_MENU) {
       const slots = Save.listSlots();
       UI.drawMainMenu(ctx, W, H, slots, true /* showStats */);
-      Input.drawControls(ctx);
       return;
     }
 
     if (state === STATE.PLAYER_PICKER) {
       if (typeof UI.drawPlayerPicker === 'function') UI.drawPlayerPicker(ctx, W, H);
-      Input.drawControls(ctx);
       return;
     }
 
     if (state === STATE.CHAR_CREATE) {
       UI.drawCharCreate(ctx, W, H);
-      Input.drawControls(ctx);
       return;
     }
 
     if (state === STATE.STATS) {
       if (typeof UI.drawStatsScreen === 'function') UI.drawStatsScreen(ctx, W, H);
-      Input.drawControls(ctx);
       return;
     }
 
@@ -1036,20 +1032,98 @@ const Engine = (() => {
 })();
 
 // ── Touch tap handling for UI ─────────────────────────────────
-// Dialogue: tap anywhere on dialogue box to advance
-// Quiz: tap on choice areas
 document.addEventListener('touchstart', e => {
   const t = e.changedTouches[0];
   const tx = t.clientX, ty = t.clientY;
   const H = window.innerHeight, W = window.innerWidth;
   const eState = Engine.currentState;
 
+  // ── Main menu ──────────────────────────────────────────────
+  if (eState === 'main_menu') {
+    const slots = Save.listSlots();
+    const itemCount = slots.length + 2; // slots + Stats + Settings
+    const bH = 54, gap = 8;
+    const startY = H * 0.5;
+    for (let i = 0; i < itemCount; i++) {
+      const iy = startY + i * (bH + gap);
+      if (ty >= iy && ty <= iy + bH) {
+        if (UI.mainMenuSel === i) {
+          Input.state.confirmPress = true;
+        } else {
+          UI.mainMenuSel = i;
+          // Second tap on same row not needed — single tap = select + confirm
+          Input.state.confirmPress = true;
+        }
+        break;
+      }
+    }
+    return;
+  }
+
+  // ── Player picker ──────────────────────────────────────────
+  if (eState === 'player_picker') {
+    const names = typeof PLAYER_NAMES !== 'undefined' ? PLAYER_NAMES : [];
+    const bH = 56, gap = 10;
+    const startY = H * 0.35;
+    for (let i = 0; i < names.length; i++) {
+      const iy = startY + i * (bH + gap);
+      if (ty >= iy && ty <= iy + bH) {
+        if (typeof UI.playerNameSel !== 'undefined') UI.playerNameSel = i;
+        Input.state.confirmPress = true;
+        break;
+      }
+    }
+    return;
+  }
+
+  // ── Character creation ─────────────────────────────────────
+  if (eState === 'char_create') {
+    const classOpts = UI.classOpts || ['ironclad', 'ashwalker', 'veilcaster'];
+    const bH = 80, gap = 12;
+    const startY = H * 0.22;
+    let hit = false;
+    for (let i = 0; i < classOpts.length; i++) {
+      const iy = startY + i * (bH + gap);
+      if (ty >= iy && ty <= iy + bH) {
+        UI.charCreateClass = i;
+        hit = true;
+        // Don't confirm yet — let player review. Tap BEGIN or tap selected class again to confirm.
+        break;
+      }
+    }
+    // BEGIN button
+    const beginY = startY + classOpts.length * (bH + gap) + 16;
+    if (ty >= beginY && ty <= beginY + 40) {
+      Input.state.confirmPress = true;
+    } else if (hit) {
+      // Tap on already-selected class = confirm
+      // (handled above; we set selection; second tap if same would need state — skip, BEGIN button is clear)
+    }
+    return;
+  }
+
+  // ── Pause menu ─────────────────────────────────────────────
+  if (eState === 'pause') {
+    const opts = ['Resume', 'Journal', 'Inventory', 'Talents', 'Save', 'Main Menu'];
+    const bH = 40, gap = 6;
+    const startY = H * 0.3;
+    for (let i = 0; i < opts.length; i++) {
+      const iy = startY + i * (bH + gap);
+      if (ty >= iy && ty <= iy + bH) {
+        UI.pauseSel = i;
+        Input.state.confirmPress = true;
+        break;
+      }
+    }
+    return;
+  }
+
+  // ── Dialogue ───────────────────────────────────────────────
   if (eState === 'dialogue') {
     const boxH = H * 0.3;
     const boxY = H - boxH - 10;
     const node = Story.getCurrentNode();
     if (node?.choices) {
-      // Determine which choice was tapped
       const nc = node.choices.length;
       const choiceY = boxY + boxH - (nc * 26) - 8;
       for (let i = 0; i < nc; i++) {
@@ -1063,8 +1137,10 @@ document.addEventListener('touchstart', e => {
     } else {
       if (ty > boxY) Input.state.confirmPress = true;
     }
+    return;
   }
 
+  // ── Memory prison / Knowledge trial quiz ──────────────────
   if (eState === 'memory_prison') {
     const qs = UI.quizState;
     if (qs && !qs.done && qs.quiz.questions[qs.currentQ]) {
@@ -1080,5 +1156,13 @@ document.addEventListener('touchstart', e => {
       }
     }
     if (qs?.done) Input.state.confirmPress = true;
+    return;
+  }
+
+  // ── Game over — Knowledge Trial "?" button ─────────────────
+  if (eState === 'game_over') {
+    // Tap anywhere on screen to confirm/cancel (already handled by input state)
+    Input.state.confirmPress = true;
+    return;
   }
 }, { passive: true });
