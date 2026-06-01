@@ -348,7 +348,7 @@ const Pets = (() => {
 
     // Pell bond trigger
     if (PET_DEFS[petId]?.pellBond && !petStates[petId].pellBonded) {
-      petStates[petId].pellBonded = false;
+      petStates[petId].pellBonded = true;
       Player.state.flags['pell_can_bond'] = true;
     }
   }

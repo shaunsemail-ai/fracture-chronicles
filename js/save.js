@@ -23,7 +23,6 @@ const Save = (() => {
           { id: 'fists', qty: 1 },
           { id: 'ashfen_ring', qty: 1 },
           { id: 'herb_minor', qty: 3 },
-          { id: 'arrow', qty: 20 },
           { id: 'aldric_journal', qty: 1 },
         ],
         equipped: {
@@ -125,6 +124,10 @@ const Save = (() => {
         setRoot(root);
         return true;
       } catch { return false; }
+    },
+
+    clearAll() {
+      try { localStorage.removeItem(KEY); } catch(e) { console.warn('clearAll failed:', e); }
     },
   };
 })();

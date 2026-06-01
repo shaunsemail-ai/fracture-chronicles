@@ -36,11 +36,16 @@ const Engine = (() => {
   let memoryPrisonCharacter = '';
   let memoryPrisonAttempt = 0;
   let _playtimeTicker = 0;
+  let _sessionStartTime = Date.now();
+  let _accumulatedPlaytime = 0; // seconds saved in prior sessions
   let _pendingProfileName = null;
 
   // ── Tap-to-move ───────────────────────────────────────────────
   let tapTarget    = null;  // { tx, ty } — tile the player is walking toward
   let tapIndicator = null;  // { tx, ty, timer } — blink animation at tapped tile
+
+  // ── Combat encounter tracking ─────────────────────────────────
+  let _inCombat = false;   // true while at least one enemy is chasing/attacking
 
   // ── Knowledge Trial state ─────────────────────────────────────
   let lastGameEvent = null;         // { type, timestamp, data }
@@ -50,11 +55,21 @@ const Engine = (() => {
 
   // ── Canvas init ───────────────────────────────────────────────
   function init() {
+    // ?reset in the URL wipes all saves and reloads clean
+    if (location.search.includes('reset')) {
+      Save.clearAll();
+      location.replace(location.pathname);
+      return;
+    }
+
     canvas = document.getElementById('canvas');
     ctx = canvas.getContext('2d');
     resize();
     window.addEventListener('resize', resize);
-    window.addEventListener('orientationchange', resize);
+    // orientationchange fires before iOS updates innerWidth/innerHeight;
+    // the 'resize' event fires afterward with correct values, but add a
+    // fallback delay to handle browsers that don't fire resize after rotation.
+    window.addEventListener('orientationchange', () => setTimeout(resize, 350));
 
     document.getElementById('loading').style.display = 'none';
     requestAnimationFrame(loop);
@@ -63,9 +78,17 @@ const Engine = (() => {
   function resize() {
     W = window.innerWidth;
     H = window.innerHeight;
-    canvas.width = W;
+    canvas.width  = W;
     canvas.height = H;
-    tileSize = Math.floor(Math.min(W, H) / 14);
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    // Landscape: fit 30 tiles across the full canvas width (zone is 30 tiles wide).
+    // Portrait:  fit 14 tiles across the canvas width.
+    // Cap at 48px so tablets don't get giant tiles.
+    tileSize = Math.min(48, Math.max(1, W > H
+      ? Math.floor(W / 30)   // landscape: 30-tile zone fills full screen width
+      : Math.floor(W / 14)   // portrait:  ~14 tiles wide
+    ));
     Input.layoutControls(W, H);
   }
 
@@ -78,12 +101,12 @@ const Engine = (() => {
     // Smooth follow
     camX += (targetX - camX) * 0.12;
     camY += (targetY - camY) * 0.12;
-    // Clamp to zone
+    // Clamp to zone; center if zone is smaller than the canvas
     if (World.current) {
       const maxX = World.current.width * tileSize - W;
       const maxY = World.current.height * tileSize - H;
-      camX = Math.max(0, Math.min(maxX, camX));
-      camY = Math.max(0, Math.min(maxY, camY));
+      camX = maxX < 0 ? maxX / 2 : Math.max(0, Math.min(maxX, camX));
+      camY = maxY < 0 ? maxY / 2 : Math.max(0, Math.min(maxY, camY));
     }
   }
 
@@ -100,6 +123,7 @@ const Engine = (() => {
     Player.state.moving = false;
     Player.state.flags['zone_' + zoneId] = true;
     Entities.spawnFromZone(zone);
+    _inCombat = false; // reset combat state on zone load
 
     // Spy sabotage: if Rael not reported and entering junction_approach, add 2 extra walkers
     if (zoneId === 'junction_approach' && !Player.state.flags.spy_reported) {
@@ -156,6 +180,8 @@ const Engine = (() => {
           const saveData = Save.load(item.slot);
           if (saveData) {
             activeSlot = item.slot;
+            _accumulatedPlaytime = saveData.playtime || 0;
+            _sessionStartTime = Date.now();
             Player.loadFromSave(saveData);
             Quests.init(saveData.quests);
             Pets.init(saveData.pets || {});
@@ -205,6 +231,8 @@ const Engine = (() => {
         const classChoice = UI.classOpts[UI.charCreateClass];
         const profileName = _pendingProfileName || `Player ${activeSlot + 1}`;
         const saveData = Save.newGame(activeSlot, profileName, classChoice);
+        _accumulatedPlaytime = 0;
+        _sessionStartTime = Date.now();
         Player.loadFromSave(saveData);
         Quests.init({});
         Pets.init({});
@@ -787,11 +815,12 @@ const Engine = (() => {
       Analytics.startSession(Player.state.profile);  // restart session after save
     }
     const flags = { ...Player.state.flags, __openedChests: [...chestOpenedIds] };
+    const _nowPlaytime = _accumulatedPlaytime + Math.floor((Date.now() - _sessionStartTime) / 1000);
     Save.save(activeSlot, {
       version: 1,
       profile: Player.state.profile,
       classChoice: Player.state.classChoice,
-      playtime: 0,
+      playtime: _nowPlaytime,
       zone: World.current?.id || 'ashfen_ruins',
       spawnPoint: { tx: Player.state.tx, ty: Player.state.ty },
       player: Player.toSaveData(),
@@ -804,6 +833,8 @@ const Engine = (() => {
       killedInAction: [],
       timestamp: Date.now(),
     });
+    _accumulatedPlaytime = _nowPlaytime;
+    _sessionStartTime = Date.now();
   }
 
   // ── Main update ───────────────────────────────────────────────
@@ -816,6 +847,21 @@ const Engine = (() => {
       Combat.update(dt);
       Pets.update(dt);
       updateCamera();
+
+      // ── Combat encounter detection ───────────────────────────
+      if (typeof Entities !== 'undefined') {
+        const hostileEnemies = Entities.enemies.filter(
+          e => e.state !== 'dead' && (e.state === 'chase' || e.state === 'attack')
+        );
+        const nowInCombat = hostileEnemies.length > 0;
+        if (nowInCombat && !_inCombat) {
+          _inCombat = true;
+          UI.startCombat();
+        } else if (!nowInCombat && _inCombat) {
+          _inCombat = false;
+          UI.endCombat();
+        }
+      }
 
       // Tick active buffs
       if (typeof Crafting !== 'undefined') Crafting.update(dt);
@@ -999,6 +1045,14 @@ const Engine = (() => {
         ctx.textBaseline = 'middle';
         ctx.fillText(questCompletedMessage, W / 2, H * 0.15);
         ctx.restore();
+      }
+
+      // Combat overlay — vignette, banner, enemy health bars
+      if (state === STATE.PLAYING) {
+        const hostiles = Entities.enemies
+          .filter(e => e.state !== 'dead' && (e.state === 'chase' || e.state === 'attack'))
+          .map(e => ({ name: e.name || e.type, hp: e.hp, maxHp: e.maxHP || e.hp }));
+        UI.drawCombatOverlay(ctx, W, H, _lastDt, hostiles);
       }
 
       UI.drawScreenFlash(ctx, W, H);

@@ -250,6 +250,8 @@ const Entities = (() => {
           const dmg = Player.takeDamage(def.atk);
           if (dmg > 0) {
             spawnFloatingText(playerTX + 0.5, playerTY - 0.5, `-${dmg}`, '#e74c3c');
+            // Red screen flash so the player knows they were hit
+            if (typeof UI !== 'undefined') UI.flashScreen(220, 30, 30, 0.45);
             // On-contact effects
             if (def.onContact && Math.random() < def.onContact.chance) {
               Player.addStatus(def.onContact.type, def.onContact.duration);

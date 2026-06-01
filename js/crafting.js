@@ -631,6 +631,7 @@ const Crafting = (() => {
       if (craftState.phase === 'select') {
         ctx.fillText(craftable ? '[A] Craft  [B] Close  [Up/Down] Select' : '[No materials]  [B] Close', W / 2, panelY + panelH - 30);
       }
+      ctx.restore();
     }
 
     // ── Timing bar ─────────────────────────────────────────────

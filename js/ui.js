@@ -744,6 +744,111 @@ const UI = (() => {
     screenFlash = Math.max(0, screenFlash - 0.04);
   }
 
+  // ── Combat overlay ────────────────────────────────────────────
+  // combatPhase: null | 'entering' | 'active' | 'victory'
+  let combatPhase = null;
+  let combatBannerTimer = 0; // counts down from 1.0 for slide-in/out animation
+  let combatVictoryTimer = 0;
+  let combatVignetteAlpha = 0; // 0..0.35, fades in/out
+
+  function startCombat() {
+    if (combatPhase === 'active' || combatPhase === 'entering') return;
+    combatPhase = 'entering';
+    combatBannerTimer = 1.2; // show "BATTLE!" banner for 1.2s
+    combatVignetteAlpha = 0;
+  }
+
+  function endCombat() {
+    if (combatPhase === null) return;
+    combatPhase = 'victory';
+    combatVictoryTimer = 1.8;
+  }
+
+  function drawCombatOverlay(ctx, W, H, dt, activeEnemies) {
+    if (combatPhase === null) return;
+
+    // Vignette (red border around the screen during combat)
+    const targetVig = (combatPhase === 'entering' || combatPhase === 'active') ? 0.35 : 0;
+    combatVignetteAlpha += (targetVig - combatVignetteAlpha) * (dt * 4);
+    if (combatVignetteAlpha > 0.01) {
+      const grad = ctx.createRadialGradient(W/2, H/2, H*0.3, W/2, H/2, H*0.85);
+      grad.addColorStop(0, 'rgba(180,20,20,0)');
+      grad.addColorStop(1, `rgba(180,20,20,${combatVignetteAlpha.toFixed(2)})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // BATTLE banner
+    if (combatPhase === 'entering') {
+      combatBannerTimer -= dt;
+      const progress = Math.max(0, combatBannerTimer / 1.2); // 1..0
+      const slideY = H * 0.38 - (progress > 0.83 ? (1 - (1-progress)/0.17) * 60 : 0);
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (1 - progress) / 0.17);
+      ctx.font = 'bold 28px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#c0392b';
+      ctx.fillText('-- BATTLE --', W/2 + 2, slideY + 2);
+      ctx.fillStyle = '#e74c3c';
+      ctx.fillText('-- BATTLE --', W/2, slideY);
+      ctx.restore();
+      if (combatBannerTimer <= 0) combatPhase = 'active';
+    }
+
+    // Active combat: show a compact enemy list at the top
+    if (combatPhase === 'active' && activeEnemies && activeEnemies.length > 0) {
+      const padding = 8, barW = Math.min(120, W * 0.28), barH = 8, rowH = 22;
+      const panelW = barW + 90, panelH = Math.min(activeEnemies.length, 4) * rowH + padding * 2;
+      const px = W / 2 - panelW / 2, py = 6;
+      ctx.save();
+      ctx.globalAlpha = 0.82;
+      ctx.fillStyle = '#0d0d12';
+      roundRect(ctx, px, py, panelW, panelH, 4);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      const shown = activeEnemies.slice(0, 4);
+      shown.forEach((e, i) => {
+        const ey = py + padding + i * rowH;
+        const pct = Math.max(0, e.hp / e.maxHp);
+        const barColor = pct > 0.5 ? '#c0392b' : pct > 0.25 ? '#e67e22' : '#e74c3c';
+        // Name
+        ctx.font = '9px "Courier New", monospace';
+        ctx.fillStyle = PAL.textDim;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(e.name.slice(0, 14), px + padding, ey + 1);
+        // HP bar
+        const bx = px + padding + 90;
+        ctx.fillStyle = '#222';
+        ctx.fillRect(bx, ey + 4, barW, barH);
+        ctx.fillStyle = barColor;
+        ctx.fillRect(bx, ey + 4, barW * pct, barH);
+      });
+      ctx.restore();
+    }
+
+    // VICTORY banner
+    if (combatPhase === 'victory') {
+      combatVictoryTimer -= dt;
+      const t = combatVictoryTimer / 1.8;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, t * 3);
+      ctx.font = 'bold 26px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#1a5c1a';
+      ctx.fillText('-- VICTORY --', W/2 + 2, H * 0.38 + 2);
+      ctx.fillStyle = '#2ecc71';
+      ctx.fillText('-- VICTORY --', W/2, H * 0.38);
+      ctx.restore();
+      if (combatVictoryTimer <= 0) {
+        combatPhase = null;
+        combatVignetteAlpha = 0;
+      }
+    }
+  }
+
   // ── Level up overlay ──────────────────────────────────────────
   let levelUpTimer = 0;
   let levelUpLevel = 0;
@@ -1084,6 +1189,7 @@ const UI = (() => {
     drawPauseMenu, drawInventory, drawTalentTree, drawJournal,
     drawMemoryPrison, drawScreenFlash, drawLevelUp, drawStatsScreen,
     drawKnowledgeTrialButton, drawKnowledgeTrialPrompt,
+    drawCombatOverlay, startCombat, endCombat,
     startMemoryPrison, startKnowledgeTrial, tickMemoryPrison, selectMemoryAnswer, confirmMemoryAnswer,
     flashScreen, showLevelUp, rarityColor,
     panel, roundRect, text, boldText, bar,

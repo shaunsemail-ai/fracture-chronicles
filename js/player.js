@@ -263,7 +263,11 @@ const Player = (() => {
   function addItem(id, qty = 1) {
     const item = ITEMS[id];
     if (!item) return false;
-    if (item.type === 'ammo' || item.stackable) {
+    if (item.type === 'ammo') {
+      // Ammo goes to the combat pool (state.ammo), not inventory.
+      // Crafting's canCraft/consumeIngredient already reads from state.ammo.
+      state.ammo[id] = (state.ammo[id] || 0) + qty;
+    } else if (item.stackable) {
       const slot = state.inventory.find(s => s.id === id);
       if (slot) slot.qty += qty;
       else state.inventory.push({ id, qty });
@@ -299,10 +303,6 @@ const Player = (() => {
   function takeDamage(raw) {
     if (state.iframes > 0) return 0;
     const cs = computeStats(state);
-    // Berserker passive
-    const berserk = state.talents.berserker || 0;
-    const hpPct = state.hp / cs.maxHP;
-    const defMult = hpPct < 0.3 ? 1 : 1; // berserker is offense, not defense
     const dmg = Math.max(1, raw - cs.def);
     state.hp -= dmg;
     state.iframes = 40;
